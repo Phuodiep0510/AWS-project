@@ -1,1 +1,2 @@
 # AWS-project
+There is often a need for data in the cloud to be replicated, copied, tagged or processed in some other way. S3 replication and batch operations offer a powerful way for organizations to add layers of security (or insecurity...) and automate their workflows. In the cloud (just as with on-premises) there are many (mis)configurations that can be made, and shifting IAM permissions can open up attack vectors.
